@@ -122,8 +122,12 @@ class ColdVision(HardwareDeviceBase):
         return self._transact("Z?")
 
     def get_model(self) -> str:
-        """Return the unit's model string."""
-        return self._transact("ZM?")
+        """Return the unit's model string.
+
+        The unit reports model and serial together as "Y:XXXXXX"; only the
+        model part is returned.
+        """
+        return self._transact("ZF?").rsplit(":", 1)[0]
 
     def get_power(self, channel: int = 0) -> int:
         """Get the output power limit for a channel.

@@ -104,7 +104,7 @@ def test_initialize_populates_identity(mock_socket_cls):
         mock_socket_cls,
         [
             b"&qSCHOTT ColdVision Light Source\r",
-            b"&zmCV-LS\r",
+            b"&zfCV-LS:123456\r",
             b"&z123456\r",
             b"&f1.23\r",
         ],
@@ -123,7 +123,7 @@ def test_initialize_tolerates_unsupported_model_query(mock_socket_cls):
         mock_socket_cls,
         [
             b"&qSCHOTT ColdVision Light Source\r",
-            b"&nzM\r",
+            b"&nzFp?\r",
             b"&z123456\r",
             b"&f1.23\r",
         ],
@@ -145,3 +145,10 @@ def test_operations_require_connection():
     device = ColdVision(log=False)
     with pytest.raises(RuntimeError, match="not connected"):
         device.get_product_name()
+
+
+@patch("coldvision.socket.socket")
+def test_get_model_strips_serial(mock_socket_cls):
+    device, sock = _make_connected(mock_socket_cls, [b"&zfCV-LS:007290\r"])
+    assert device.get_model() == "CV-LS"
+    sock.sendall.assert_called_once_with(b"&ZF?\r")
