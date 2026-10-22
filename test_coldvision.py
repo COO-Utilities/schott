@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from coldvision import ColdVision, ColdVisionError
+from coldvision import ColdVision, ColdVisionError, EqualizerStatus, ErrorFlags
 
 
 def _make_connected(mock_socket_cls, recv_replies):
@@ -205,3 +205,29 @@ def test_get_and_set_equalizer_delay(mock_socket_cls):
 
     assert device.set_equalizer_delay(100) == 100
     sock.sendall.assert_called_with(b"&EI100\r")
+
+
+@patch("coldvision.socket.socket")
+def test_equalizer_status_returns_enum(mock_socket_cls):
+    device, _ = _make_connected(mock_socket_cls, [b"&es8\r"])
+    status = device.get_equalizer_status()
+    assert status is EqualizerStatus.OVER_RANGE
+
+
+@patch("coldvision.socket.socket")
+def test_equalizer_status_unknown_code_returns_int(mock_socket_cls):
+    device, _ = _make_connected(mock_socket_cls, [b"&es3\r"])
+    status = device.get_equalizer_status()
+    assert status == 3
+    assert not isinstance(status, EqualizerStatus)
+
+
+@patch("coldvision.socket.socket")
+def test_error_flags_decode(mock_socket_cls):
+    device, sock = _make_connected(mock_socket_cls, [b"&c3\r", b"&c0\r"])
+    flags = device.get_error_flags()
+    sock.sendall.assert_called_with(b"&C?\r")
+    assert ErrorFlags.FAN_ERROR in flags
+    assert ErrorFlags.LED_TEMP_ERROR in flags
+
+    assert device.get_error_flags() == ErrorFlags.NONE

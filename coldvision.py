@@ -10,9 +10,32 @@ Programming Guide (D20980.026) for the full command set.
 from __future__ import annotations
 
 import socket
+from enum import IntEnum, IntFlag
 from typing import Union
 
 from hardware_device_base import HardwareDeviceBase
+
+
+class EqualizerStatus(IntEnum):
+    """Equalizer stability codes reported by `&ES?`."""
+
+    NOT_STABLE = 0
+    LOCKED = 1
+    WAITING_FOR_DELAY = 2
+    INTENSITY_LOW = 4
+    INTENSITY_HIGH = 6
+    OVER_RANGE = 8  # intensity too low to maintain stability
+    UNDER_RANGE = 10  # intensity too high to maintain stability
+
+
+class ErrorFlags(IntFlag):
+    """System error flags reported by `&C?`."""
+
+    NONE = 0
+    FAN_ERROR = 1 << 0
+    LED_TEMP_ERROR = 1 << 1
+    # The guide calls this an 8 bit value
+    ANY_FAULT = 1 << 8
 
 
 class ColdVisionError(RuntimeError):
@@ -176,19 +199,22 @@ class ColdVision(HardwareDeviceBase):
         """
         return self._transact(f"E{int(enabled)}", name="E") == "1"
 
-    def get_equalizer_status(self) -> int:
+    def get_equalizer_status(self) -> EqualizerStatus | int:
         """Return the equalizer stability code.
 
-        0 = Not stable, 1 = Locked (stable), 2 = Waiting for start-up delay,
-        4 = Intensity low, 6 = Intensity high,
-        8 = Over range (intensity too low to maintain stability),
-        10 = Under range (intensity too high to maintain stability).
+        :return: An EqualizerStatus, or the raw int if the unit reports a
+            code not listed in the programming guide.
         """
-        return int(self._transact("ES?"))
+        code = int(self._transact("ES?"))
+        try:
+            return EqualizerStatus(code)
+        except ValueError:
+            self.report_warning(f"Unknown equalizer status code: {code}")
+            return code
 
     def is_equalizer_locked(self) -> bool:
         """Return True if the equalizer control loop is locked (stable)."""
-        return self.get_equalizer_status() == 1
+        return self.get_equalizer_status() == EqualizerStatus.LOCKED
 
     def get_equalizer_target(self) -> int:
         """Get the equalizer target light output.
@@ -241,12 +267,9 @@ class ColdVision(HardwareDeviceBase):
         """Return the current fan speed in RPM."""
         return int(self._transact("?G"))
 
-    def get_error_flags(self) -> int:
-        """Return the system error flags as an 8 bit integer.
-
-        Bit 0 = Fan Error, Bit 1 = LED Temp Error, Bit 8 = Any Faults.
-        """
-        return int(self._transact("C?"))
+    def get_error_flags(self) -> ErrorFlags:
+        """Return the system error flags, ex: `ErrorFlags.FAN_ERROR`."""
+        return ErrorFlags(int(self._transact("C?")))
 
     def save_settings(self) -> None:
         """Store the current settings to memory."""
