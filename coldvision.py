@@ -38,6 +38,13 @@ class ErrorFlags(IntFlag):
     ANY_FAULT = 1 << 8
 
 
+class TriggerEdge(IntEnum):
+    """Triggered strobe input edge reported by `&PJ#,?`."""
+
+    RISING = 0
+    FALLING = 1
+
+
 class ColdVisionError(RuntimeError):
     """Raised when the CV-LS rejects a command or a transaction fails."""
 
@@ -254,6 +261,110 @@ class ColdVision(HardwareDeviceBase):
         if not 0 <= value <= 500:
             raise ValueError("value must be between 0 and 500")
         return int(self._transact(f"EI{value}", name="EI"))
+
+    def get_triggered_strobe_enabled(self) -> bool:
+        """Get whether triggered strobe mode is enabled."""
+        return self._transact("PM?") == "1"
+
+    def set_triggered_strobe_enabled(self, enabled: bool) -> bool:
+        """Enable or disable triggered strobe mode
+
+        :param enabled: True to enable, False to disable
+        :return: The enabled state acknowledged by the unit
+        """
+        return self._transact(f"PM{int(enabled)}", name="PM") == "1"
+
+    def get_trigger_combined(self) -> bool:
+        """Get whether any digital input triggers all channels at once."""
+        return self._transact("PJ0,?") == "1"
+
+    def set_trigger_combined(self, enabled: bool) -> bool:
+        """Set whether any digital input triggers all channels at once
+
+        :param enabled: True to combine all trigger inputs
+        :return: The combined state acknowledged by the unit
+        """
+        return self._transact(f"PJ0,{int(enabled)}") == "1"
+
+    def get_trigger_single_channel(self) -> bool:
+        """Get whether triggered strobe runs as a single channel device."""
+        return self._transact("PB?") == "1"
+
+    def set_trigger_single_channel(self, single: bool) -> bool:
+        """Set single (True) or quad (False) channel triggered strobe
+
+        :param single: True for single channel mode, False for quad
+        :return: The mode acknowledged by the unit
+        """
+        return self._transact(f"PB{int(single)}", name="PB") == "1"
+
+    def get_trigger_delay(self, channel: int) -> int:
+        """Get the delay from trigger input to light output for a channel
+
+        :param channel: 1-4
+        :return: Delay in microseconds, on top of a 4-9 us system delay
+        """
+        self._check_strobe_channel(channel)
+        return int(self._transact(f"PD{channel},?"))
+
+    def set_trigger_delay(self, value: int, channel: int) -> int:
+        """Set the delay from trigger input to light output for a channel
+
+        :param value: Delay in microseconds, 0-1000000
+        :param channel: 1-4
+        :return: The delay acknowledged by the unit
+        """
+        self._check_strobe_channel(channel)
+        if not 0 <= value <= 1_000_000:
+            raise ValueError("value must be between 0 and 1000000")
+        return int(self._transact(f"PD{channel},{value}"))
+
+    def get_trigger_on_time(self, channel: int) -> int:
+        """Get how long a channel stays on per trigger
+
+        :param channel: 1-4
+        :return: On time in microseconds
+        """
+        self._check_strobe_channel(channel)
+        return int(self._transact(f"PO{channel},?"))
+
+    def set_trigger_on_time(self, value: int, channel: int) -> int:
+        """Set how long a channel stays on per trigger
+
+        The unit's timer has 5 us resolution.
+
+        :param value: On time in microseconds, 0-1000000
+        :param channel: 1-4
+        :return: The on time acknowledged by the unit
+        """
+        self._check_strobe_channel(channel)
+        if not 0 <= value <= 1_000_000:
+            raise ValueError("value must be between 0 and 1000000")
+        return int(self._transact(f"PO{channel},{value}"))
+
+    def get_trigger_edge(self, channel: int) -> TriggerEdge:
+        """Get which input edge triggers a channel
+
+        :param channel: 1-4
+        """
+        self._check_strobe_channel(channel)
+        return TriggerEdge(int(self._transact(f"PJ{channel},?")))
+
+    def set_trigger_edge(self, edge: TriggerEdge, channel: int) -> TriggerEdge:
+        """Set which input edge triggers a channel
+
+        :param edge: TriggerEdge.RISING or TriggerEdge.FALLING
+        :param channel: 1-4
+        :return: The edge acknowledged by the unit
+        """
+        self._check_strobe_channel(channel)
+        edge = TriggerEdge(edge)
+        return TriggerEdge(int(self._transact(f"PJ{channel},{edge.value}")))
+
+    @staticmethod
+    def _check_strobe_channel(channel: int) -> None:
+        if not 1 <= channel <= 4:
+            raise ValueError("channel must be between 1 and 4")
 
     def get_led_temperature(self) -> float:
         """Return the LED PCB temperature in Celsius."""

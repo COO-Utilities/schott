@@ -4,7 +4,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from coldvision import ColdVision, ColdVisionError, EqualizerStatus, ErrorFlags
+from coldvision import (
+    ColdVision,
+    ColdVisionError,
+    EqualizerStatus,
+    ErrorFlags,
+    TriggerEdge,
+)
 
 
 def _make_connected(mock_socket_cls, recv_replies):
@@ -231,3 +237,73 @@ def test_error_flags_decode(mock_socket_cls):
     assert ErrorFlags.LED_TEMP_ERROR in flags
 
     assert device.get_error_flags() == ErrorFlags.NONE
+
+
+@patch("coldvision.socket.socket")
+def test_get_and_set_triggered_strobe_enabled(mock_socket_cls):
+    device, sock = _make_connected(mock_socket_cls, [b"&pm1\r", b"&pm0\r"])
+    assert device.set_triggered_strobe_enabled(True) is True
+    sock.sendall.assert_called_with(b"&PM1\r")
+
+    assert device.get_triggered_strobe_enabled() is False
+    sock.sendall.assert_called_with(b"&PM?\r")
+
+
+@patch("coldvision.socket.socket")
+def test_get_and_set_trigger_combined(mock_socket_cls):
+    device, sock = _make_connected(mock_socket_cls, [b"&pj0,1\r", b"&pj0,1\r"])
+    assert device.set_trigger_combined(True) is True
+    sock.sendall.assert_called_with(b"&PJ0,1\r")
+
+    assert device.get_trigger_combined() is True
+    sock.sendall.assert_called_with(b"&PJ0,?\r")
+
+
+@patch("coldvision.socket.socket")
+def test_get_and_set_trigger_single_channel(mock_socket_cls):
+    device, sock = _make_connected(mock_socket_cls, [b"&pb1\r", b"&pb0\r"])
+    assert device.set_trigger_single_channel(True) is True
+    sock.sendall.assert_called_with(b"&PB1\r")
+
+    assert device.get_trigger_single_channel() is False
+    sock.sendall.assert_called_with(b"&PB?\r")
+
+
+@patch("coldvision.socket.socket")
+def test_get_and_set_trigger_delay(mock_socket_cls):
+    device, sock = _make_connected(mock_socket_cls, [b"&pd2,0050\r", b"&pd2,1500\r"])
+    assert device.get_trigger_delay(channel=2) == 50
+    sock.sendall.assert_called_with(b"&PD2,?\r")
+
+    assert device.set_trigger_delay(1500, channel=2) == 1500
+    sock.sendall.assert_called_with(b"&PD2,1500\r")
+
+
+@patch("coldvision.socket.socket")
+def test_get_and_set_trigger_on_time(mock_socket_cls):
+    device, sock = _make_connected(mock_socket_cls, [b"&po1,100\r", b"&po1,250\r"])
+    assert device.get_trigger_on_time(channel=1) == 100
+    sock.sendall.assert_called_with(b"&PO1,?\r")
+
+    assert device.set_trigger_on_time(250, channel=1) == 250
+    sock.sendall.assert_called_with(b"&PO1,250\r")
+
+
+@patch("coldvision.socket.socket")
+def test_get_and_set_trigger_edge(mock_socket_cls):
+    device, sock = _make_connected(mock_socket_cls, [b"&pj3,1\r", b"&pj3,0\r"])
+    assert device.set_trigger_edge(TriggerEdge.FALLING, channel=3) is TriggerEdge.FALLING
+    sock.sendall.assert_called_with(b"&PJ3,1\r")
+
+    assert device.get_trigger_edge(channel=3) is TriggerEdge.RISING
+    sock.sendall.assert_called_with(b"&PJ3,?\r")
+
+
+def test_trigger_methods_validate_channel_and_range():
+    device = ColdVision(log=False)
+    with pytest.raises(ValueError, match="channel"):
+        device.get_trigger_delay(channel=0)
+    with pytest.raises(ValueError, match="channel"):
+        device.set_trigger_edge(TriggerEdge.RISING, channel=5)
+    with pytest.raises(ValueError):
+        device.set_trigger_on_time(1_000_001, channel=1)

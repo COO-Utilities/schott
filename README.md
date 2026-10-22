@@ -41,3 +41,5 @@ with ColdVision() as light:
     light.set_enabled(False)
     light.save_settings()
 ```
+
+See [USAGE.md](USAGE.md) for more information.
