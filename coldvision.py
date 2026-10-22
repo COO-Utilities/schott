@@ -164,6 +164,71 @@ class ColdVision(HardwareDeviceBase):
         """
         return self._transact(f"L{channel},{int(enabled)}") == "1"
 
+    def get_equalizer_enabled(self) -> bool:
+        """Get whether the closed-loop light equalizer is enabled."""
+        return self._transact("E?") == "1"
+
+    def set_equalizer_enabled(self, enabled: bool) -> bool:
+        """Enable or disable the closed-loop light equalizer
+
+        :param enabled: True to enable, False to disable
+        :return: The enabled state acknowledged by the unit
+        """
+        return self._transact(f"E{int(enabled)}", name="E") == "1"
+
+    def get_equalizer_status(self) -> int:
+        """Return the equalizer stability code.
+
+        0 = Not stable, 1 = Locked (stable), 2 = Waiting for start-up delay,
+        4 = Intensity low, 6 = Intensity high,
+        8 = Over range (intensity too low to maintain stability),
+        10 = Under range (intensity too high to maintain stability).
+        """
+        return int(self._transact("ES?"))
+
+    def is_equalizer_locked(self) -> bool:
+        """Return True if the equalizer control loop is locked (stable)."""
+        return self.get_equalizer_status() == 1
+
+    def get_equalizer_target(self) -> int:
+        """Get the equalizer target light output.
+
+        :return: Target in the range 0-4095
+        """
+        return int(self._transact("EE?"), 16)
+
+    def set_equalizer_target(self, value: int) -> int:
+        """Set the equalizer target light output
+
+        :param value: Target in the range 0-4095
+        :return: The target acknowledged by the unit
+        """
+        if not 0 <= value <= 4095:
+            raise ValueError("value must be between 0 and 4095")
+        return int(self._transact(f"EE{value:03X}", name="EE"), 16)
+
+    def get_equalizer_feedback(self) -> int:
+        """Return the time-averaged light feedback used by the equalizer (0-4095)."""
+        return int(self._transact("EV?"), 16)
+
+    def get_equalizer_output(self) -> int:
+        """Return the current output power of the equalizer loop (0-4095)."""
+        return int(self._transact("ED?"), 16)
+
+    def get_equalizer_delay(self) -> int:
+        """Get the start-up delay before the equalizer takes control (0-500)."""
+        return int(self._transact("EI?"))
+
+    def set_equalizer_delay(self, value: int) -> int:
+        """Set the start-up delay before the equalizer takes control
+
+        :param value: Delay in the range 0-500
+        :return: The delay acknowledged by the unit
+        """
+        if not 0 <= value <= 500:
+            raise ValueError("value must be between 0 and 500")
+        return int(self._transact(f"EI{value}", name="EI"))
+
     def get_led_temperature(self) -> float:
         """Return the LED PCB temperature in Celsius."""
         return float(self._transact("?LT"))
@@ -195,11 +260,13 @@ class ColdVision(HardwareDeviceBase):
         """Reboot the unit's processor."""
         self._transact("O4")
 
-    def _transact(self, command: str) -> str:
+    def _transact(self, command: str, name: str | None = None) -> str:
         """Send a command and return its parsed reply value.
 
         :param command: Command body without the leading `&` or trailing
             carriage return, ex: `"?LT"` or `"I0,500"`.
+        :param name: Command name to strip from the reply, needed for set
+            commands without a comma, ex: `"E"` for `"E1"`. Inferred if None.
         :return: Value from the reply.
         :raises ColdVisionError: If the send fails, no reply is received, or
             the unit returns a NACK.
@@ -214,11 +281,13 @@ class ColdVision(HardwareDeviceBase):
             raise ColdVisionNack(
                 f"Negative acknowledgement for command '&{command}': {reply}"
             )
-        return self._parse_value(command, reply)
+        return self._parse_value(command, reply, name)
 
     @staticmethod
-    def _parse_value(command: str, reply: str) -> str:
-        if "," in command:
+    def _parse_value(command: str, reply: str, name: str | None = None) -> str:
+        if name is not None:
+            prefix = f"&{name}".lower()
+        elif "," in command:
             head = command.split(",", 1)[0]
             prefix = f"&{head},".lower()
         else:

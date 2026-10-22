@@ -152,3 +152,56 @@ def test_get_model_strips_serial(mock_socket_cls):
     device, sock = _make_connected(mock_socket_cls, [b"&zfCV-LS:007290\r"])
     assert device.get_model() == "CV-LS"
     sock.sendall.assert_called_once_with(b"&ZF?\r")
+
+
+@patch("coldvision.socket.socket")
+def test_get_and_set_equalizer_enabled(mock_socket_cls):
+    device, sock = _make_connected(mock_socket_cls, [b"&e1\r", b"&e0\r"])
+    assert device.set_equalizer_enabled(True) is True
+    sock.sendall.assert_called_with(b"&E1\r")
+
+    assert device.get_equalizer_enabled() is False
+    sock.sendall.assert_called_with(b"&E?\r")
+
+
+@patch("coldvision.socket.socket")
+def test_equalizer_status(mock_socket_cls):
+    device, sock = _make_connected(mock_socket_cls, [b"&es2\r", b"&es1\r"])
+    assert device.get_equalizer_status() == 2
+    sock.sendall.assert_called_with(b"&ES?\r")
+    assert device.is_equalizer_locked() is True
+
+
+@patch("coldvision.socket.socket")
+def test_equalizer_target_uses_hex(mock_socket_cls):
+    device, sock = _make_connected(mock_socket_cls, [b"&ee7D0\r", b"&eeFFF\r"])
+    assert device.get_equalizer_target() == 2000
+    sock.sendall.assert_called_with(b"&EE?\r")
+
+    assert device.set_equalizer_target(4095) == 4095
+    sock.sendall.assert_called_with(b"&EEFFF\r")
+
+
+def test_set_equalizer_target_validates_range():
+    device = ColdVision(log=False)
+    with pytest.raises(ValueError):
+        device.set_equalizer_target(4096)
+
+
+@patch("coldvision.socket.socket")
+def test_equalizer_feedback_and_output(mock_socket_cls):
+    device, sock = _make_connected(mock_socket_cls, [b"&ev3E8\r", b"&ed1F4\r"])
+    assert device.get_equalizer_feedback() == 1000
+    sock.sendall.assert_called_with(b"&EV?\r")
+    assert device.get_equalizer_output() == 500
+    sock.sendall.assert_called_with(b"&ED?\r")
+
+
+@patch("coldvision.socket.socket")
+def test_get_and_set_equalizer_delay(mock_socket_cls):
+    device, sock = _make_connected(mock_socket_cls, [b"&ei050\r", b"&ei100\r"])
+    assert device.get_equalizer_delay() == 50
+    sock.sendall.assert_called_with(b"&EI?\r")
+
+    assert device.set_equalizer_delay(100) == 100
+    sock.sendall.assert_called_with(b"&EI100\r")
