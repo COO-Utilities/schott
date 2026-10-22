@@ -19,6 +19,10 @@ class ColdVisionError(RuntimeError):
     """Raised when the CV-LS rejects a command or a transaction fails."""
 
 
+class ColdVisionNack(ColdVisionError):
+    """Raised when the CV-LS replies with a negative acknowledgement."""
+
+
 class ColdVision(HardwareDeviceBase):
     """A driver class for the SCHOTT ColdVision CV-LS light source."""
 
@@ -71,13 +75,21 @@ class ColdVision(HardwareDeviceBase):
     def initialize(self) -> bool:
         """Query identification info to confirm the connected unit
 
+        The product name is required; model, serial number and firmware
+        revision are best-effort, since not every unit/firmware supports
+        every query. Fields the unit rejects are left as None.
+
         :return: True if identification succeeded, False otherwise
         """
         try:
             self.product_name = self.get_product_name()
-            self.model = self.get_model()
-            self.serial_number = self.get_serial_number()
-            self.firmware_revision = self.get_firmware_revision()
+            self.model = self._query_optional(self.get_model, "model")
+            self.serial_number = self._query_optional(
+                self.get_serial_number, "serial number"
+            )
+            self.firmware_revision = self._query_optional(
+                self.get_firmware_revision, "firmware revision"
+            )
         except ColdVisionError as exc:
             self.report_error(f"Initialization failed: {exc}")
             self.initialized = False
@@ -89,12 +101,20 @@ class ColdVision(HardwareDeviceBase):
         self.initialized = True
         return True
 
+    def _query_optional(self, getter, name: str) -> str | None:
+        """Run an identification query, returning None if the unit NACKs it."""
+        try:
+            return getter()
+        except ColdVisionNack as exc:
+            self.report_warning(f"Unit does not support {name} query: {exc}")
+            return None
+
     def get_product_name(self) -> str:
         """Return the product name string, e.g. "SCHOTT ColdVision Light Source"."""
         return self._transact("Q")
 
     def get_firmware_revision(self) -> str:
-        """Return the firmware revision string, e.g. "1.23""""
+        """Return the firmware revision string, e.g. "1.23"."""
         return self._transact("F?")
 
     def get_serial_number(self) -> str:
@@ -102,8 +122,12 @@ class ColdVision(HardwareDeviceBase):
         return self._transact("Z?")
 
     def get_model(self) -> str:
-        """Return the unit's model string."""
-        return self._transact("ZM?")
+        """Return the unit's model string.
+
+        The unit reports model and serial together as "Y:XXXXXX"; only the
+        model part is returned.
+        """
+        return self._transact("ZF?").rsplit(":", 1)[0]
 
     def get_power(self, channel: int = 0) -> int:
         """Get the output power limit for a channel.
@@ -187,7 +211,7 @@ class ColdVision(HardwareDeviceBase):
             raise ColdVisionError(f"No reply received for command '&{command}'")
 
         if reply.lower().startswith("&n") and not command.lower().startswith("n"):
-            raise ColdVisionError(
+            raise ColdVisionNack(
                 f"Negative acknowledgement for command '&{command}': {reply}"
             )
         return self._parse_value(command, reply)
