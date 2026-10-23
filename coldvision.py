@@ -10,9 +10,39 @@ Programming Guide (D20980.026) for the full command set.
 from __future__ import annotations
 
 import socket
+from enum import IntEnum, IntFlag
 from typing import Union
 
 from hardware_device_base import HardwareDeviceBase
+
+
+class EqualizerStatus(IntEnum):
+    """Equalizer stability codes reported by `&ES?`."""
+
+    NOT_STABLE = 0
+    LOCKED = 1
+    WAITING_FOR_DELAY = 2
+    INTENSITY_LOW = 4
+    INTENSITY_HIGH = 6
+    OVER_RANGE = 8  # intensity too low to maintain stability
+    UNDER_RANGE = 10  # intensity too high to maintain stability
+
+
+class ErrorFlags(IntFlag):
+    """System error flags reported by `&C?`."""
+
+    NONE = 0
+    FAN_ERROR = 1 << 0
+    LED_TEMP_ERROR = 1 << 1
+    # The guide calls this an 8 bit value
+    ANY_FAULT = 1 << 8
+
+
+class TriggerEdge(IntEnum):
+    """Triggered strobe input edge reported by `&PJ#,?`."""
+
+    RISING = 0
+    FALLING = 1
 
 
 class ColdVisionError(RuntimeError):
@@ -164,6 +194,178 @@ class ColdVision(HardwareDeviceBase):
         """
         return self._transact(f"L{channel},{int(enabled)}") == "1"
 
+    def get_equalizer_enabled(self) -> bool:
+        """Get whether the closed-loop light equalizer is enabled."""
+        return self._transact("E?") == "1"
+
+    def set_equalizer_enabled(self, enabled: bool) -> bool:
+        """Enable or disable the closed-loop light equalizer
+
+        :param enabled: True to enable, False to disable
+        :return: The enabled state acknowledged by the unit
+        """
+        return self._transact(f"E{int(enabled)}", name="E") == "1"
+
+    def get_equalizer_status(self) -> EqualizerStatus | int:
+        """Return the equalizer stability code.
+
+        :return: An EqualizerStatus, or the raw int if the unit reports a
+            code not listed in the programming guide.
+        """
+        code = int(self._transact("ES?"))
+        try:
+            return EqualizerStatus(code)
+        except ValueError:
+            self.report_warning(f"Unknown equalizer status code: {code}")
+            return code
+
+    def is_equalizer_locked(self) -> bool:
+        """Return True if the equalizer control loop is locked (stable)."""
+        return self.get_equalizer_status() == EqualizerStatus.LOCKED
+
+    def get_equalizer_target(self) -> int:
+        """Get the equalizer target light output.
+
+        :return: Target in the range 0-4095
+        """
+        return int(self._transact("EE?"), 16)
+
+    def set_equalizer_target(self, value: int) -> int:
+        """Set the equalizer target light output
+
+        :param value: Target in the range 0-4095
+        :return: The target acknowledged by the unit
+        """
+        if not 0 <= value <= 4095:
+            raise ValueError("value must be between 0 and 4095")
+        return int(self._transact(f"EE{value:03X}", name="EE"), 16)
+
+    def get_equalizer_feedback(self) -> int:
+        """Return the time-averaged light feedback used by the equalizer (0-4095)."""
+        return int(self._transact("EV?"), 16)
+
+    def get_equalizer_output(self) -> int:
+        """Return the current output power of the equalizer loop (0-4095)."""
+        return int(self._transact("ED?"), 16)
+
+    def get_equalizer_delay(self) -> int:
+        """Get the start-up delay before the equalizer takes control (0-500)."""
+        return int(self._transact("EI?"))
+
+    def set_equalizer_delay(self, value: int) -> int:
+        """Set the start-up delay before the equalizer takes control
+
+        :param value: Delay in the range 0-500
+        :return: The delay acknowledged by the unit
+        """
+        if not 0 <= value <= 500:
+            raise ValueError("value must be between 0 and 500")
+        return int(self._transact(f"EI{value}", name="EI"))
+
+    def get_triggered_strobe_enabled(self) -> bool:
+        """Get whether triggered strobe mode is enabled."""
+        return self._transact("PM?") == "1"
+
+    def set_triggered_strobe_enabled(self, enabled: bool) -> bool:
+        """Enable or disable triggered strobe mode
+
+        :param enabled: True to enable, False to disable
+        :return: The enabled state acknowledged by the unit
+        """
+        return self._transact(f"PM{int(enabled)}", name="PM") == "1"
+
+    def get_trigger_combined(self) -> bool:
+        """Get whether any digital input triggers all channels at once."""
+        return self._transact("PJ0,?") == "1"
+
+    def set_trigger_combined(self, enabled: bool) -> bool:
+        """Set whether any digital input triggers all channels at once
+
+        :param enabled: True to combine all trigger inputs
+        :return: The combined state acknowledged by the unit
+        """
+        return self._transact(f"PJ0,{int(enabled)}") == "1"
+
+    def get_trigger_single_channel(self) -> bool:
+        """Get whether triggered strobe runs as a single channel device."""
+        return self._transact("PB?") == "1"
+
+    def set_trigger_single_channel(self, single: bool) -> bool:
+        """Set single (True) or quad (False) channel triggered strobe
+
+        :param single: True for single channel mode, False for quad
+        :return: The mode acknowledged by the unit
+        """
+        return self._transact(f"PB{int(single)}", name="PB") == "1"
+
+    def get_trigger_delay(self, channel: int) -> int:
+        """Get the delay from trigger input to light output for a channel
+
+        :param channel: 1-4
+        :return: Delay in microseconds, on top of a 4-9 us system delay
+        """
+        self._check_strobe_channel(channel)
+        return int(self._transact(f"PD{channel},?"))
+
+    def set_trigger_delay(self, value: int, channel: int) -> int:
+        """Set the delay from trigger input to light output for a channel
+
+        :param value: Delay in microseconds, 0-1000000
+        :param channel: 1-4
+        :return: The delay acknowledged by the unit
+        """
+        self._check_strobe_channel(channel)
+        if not 0 <= value <= 1_000_000:
+            raise ValueError("value must be between 0 and 1000000")
+        return int(self._transact(f"PD{channel},{value}"))
+
+    def get_trigger_on_time(self, channel: int) -> int:
+        """Get how long a channel stays on per trigger
+
+        :param channel: 1-4
+        :return: On time in microseconds
+        """
+        self._check_strobe_channel(channel)
+        return int(self._transact(f"PO{channel},?"))
+
+    def set_trigger_on_time(self, value: int, channel: int) -> int:
+        """Set how long a channel stays on per trigger
+
+        The unit's timer has 5 us resolution.
+
+        :param value: On time in microseconds, 0-1000000
+        :param channel: 1-4
+        :return: The on time acknowledged by the unit
+        """
+        self._check_strobe_channel(channel)
+        if not 0 <= value <= 1_000_000:
+            raise ValueError("value must be between 0 and 1000000")
+        return int(self._transact(f"PO{channel},{value}"))
+
+    def get_trigger_edge(self, channel: int) -> TriggerEdge:
+        """Get which input edge triggers a channel
+
+        :param channel: 1-4
+        """
+        self._check_strobe_channel(channel)
+        return TriggerEdge(int(self._transact(f"PJ{channel},?")))
+
+    def set_trigger_edge(self, edge: TriggerEdge, channel: int) -> TriggerEdge:
+        """Set which input edge triggers a channel
+
+        :param edge: TriggerEdge.RISING or TriggerEdge.FALLING
+        :param channel: 1-4
+        :return: The edge acknowledged by the unit
+        """
+        self._check_strobe_channel(channel)
+        edge = TriggerEdge(edge)
+        return TriggerEdge(int(self._transact(f"PJ{channel},{edge.value}")))
+
+    @staticmethod
+    def _check_strobe_channel(channel: int) -> None:
+        if not 1 <= channel <= 4:
+            raise ValueError("channel must be between 1 and 4")
+
     def get_led_temperature(self) -> float:
         """Return the LED PCB temperature in Celsius."""
         return float(self._transact("?LT"))
@@ -176,12 +378,9 @@ class ColdVision(HardwareDeviceBase):
         """Return the current fan speed in RPM."""
         return int(self._transact("?G"))
 
-    def get_error_flags(self) -> int:
-        """Return the system error flags as an 8 bit integer.
-
-        Bit 0 = Fan Error, Bit 1 = LED Temp Error, Bit 8 = Any Faults.
-        """
-        return int(self._transact("C?"))
+    def get_error_flags(self) -> ErrorFlags:
+        """Return the system error flags, ex: `ErrorFlags.FAN_ERROR`."""
+        return ErrorFlags(int(self._transact("C?")))
 
     def save_settings(self) -> None:
         """Store the current settings to memory."""
@@ -195,11 +394,13 @@ class ColdVision(HardwareDeviceBase):
         """Reboot the unit's processor."""
         self._transact("O4")
 
-    def _transact(self, command: str) -> str:
+    def _transact(self, command: str, name: str | None = None) -> str:
         """Send a command and return its parsed reply value.
 
         :param command: Command body without the leading `&` or trailing
             carriage return, ex: `"?LT"` or `"I0,500"`.
+        :param name: Command name to strip from the reply, needed for set
+            commands without a comma, ex: `"E"` for `"E1"`. Inferred if None.
         :return: Value from the reply.
         :raises ColdVisionError: If the send fails, no reply is received, or
             the unit returns a NACK.
@@ -214,11 +415,13 @@ class ColdVision(HardwareDeviceBase):
             raise ColdVisionNack(
                 f"Negative acknowledgement for command '&{command}': {reply}"
             )
-        return self._parse_value(command, reply)
+        return self._parse_value(command, reply, name)
 
     @staticmethod
-    def _parse_value(command: str, reply: str) -> str:
-        if "," in command:
+    def _parse_value(command: str, reply: str, name: str | None = None) -> str:
+        if name is not None:
+            prefix = f"&{name}".lower()
+        elif "," in command:
             head = command.split(",", 1)[0]
             prefix = f"&{head},".lower()
         else:
